@@ -19,7 +19,8 @@ from backend.ocr_tool import ocr_tool
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PDF AI 助手后端 (带鉴权功能)")
+# 初始化 FastAPI 并挂载 Consul 生命周期管理
+app = FastAPI(title="PDF AI 助手后端", lifespan=consul_lifespan)
 
 # --- 1. Redis 初始化与配置 ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
