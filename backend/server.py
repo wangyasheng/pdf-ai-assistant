@@ -7,7 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from starlette.responses import JSONResponse
+from contextlib import asynccontextmanager
 
+# 引入刚刚封装的本地模块
+from backend.consul import consul_lifespan
+from backend.auth import token_auth_middleware, handle_user_login_db, get_client_real_ip, check_redis_health
+from backend.db import mysql_pool
 from backend.agent import DeepSeekAgent, ExamQuestion
 from backend.ocr_tool import ocr_tool
 
@@ -28,6 +33,32 @@ except redis.ConnectionError:
     logger.warning("Redis 不可用，鉴权功能将失效")
     r = None
 
+    # --- 2. 优雅启停生命周期管理 (Lifespan) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 【启动时触发】
+    logger.info("🚀 FastAPI 正在启动...")
+    if mysql_pool:
+        logger.info("📊 MySQL 线程安全连接池已就绪")
+    else:
+        logger.error("🚨 MySQL 连接池未正常初始化，请检查 backend/db.py 配置！")
+        
+    yield  # 这里是分割线，上面是启动执行，下面是关闭执行
+    
+    # 【关闭时触发】
+    logger.info("🛑 FastAPI 正在关闭，准备释放全局资源...")
+    if mysql_pool:
+        mysql_pool.close()
+        logger.info("✅ MySQL 连接池已安全关闭并释放所有活动连接")
+
+# --- 3. 初始化 FastAPI 实例 ---
+app = FastAPI(
+    title="AI 知识库系统后端 API",
+    description="基于 FastAPI + Redis集群 + MySQL 的分布式高并发网关",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
 # --- 2. 跨域配置 ---
 app.add_middleware(
     CORSMiddleware,
@@ -36,44 +67,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def _auth_key(token: str) -> str:
-    return f"auth:access:{token}"
-
-
-# --- 3. 全局 Token 鉴权中间件 ---
+# --- 5. 挂载全局 Token & 智能设备指纹鉴权中间件 ---
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    path = request.url.path
-
-    if path in WHITE_LIST:
-        return await call_next(request)
-
-    if r is None:
-        return JSONResponse(status_code=503, content={"detail": "认证服务不可用"})
-
-    token = request.headers.get("Authorization")
-    fingerprint = request.headers.get("X-Device-Fingerprint")
-
-    if not token or not fingerprint:
-        return JSONResponse(status_code=401, content={"detail": "鉴权信息不全，请传入 Token 和指纹"})
-
-    stored_data = r.get(_auth_key(token))
-    if not stored_data:
-        return JSONResponse(status_code=401, content={"detail": "登录已失效"})
-
-    try:
-        phone, saved_fp = stored_data.split("|", 1)
-    except ValueError:
-        return JSONResponse(status_code=401, content={"detail": "Token 格式异常"})
-
-    if fingerprint != saved_fp:
-        return JSONResponse(status_code=403, content={"detail": "账号在其他设备登录或指纹不匹配"})
-
-    # 滑动续期
-    r.expire(_auth_key(token), ACCESS_TOKEN_EXPIRE)
-
-    request.state.user_phone = phone
-    return await call_next(request)
+    # 直接调用 auth 模块中封装的分布式认证拦截器
+    return await token_auth_middleware(request, call_next)
 
 # --- 4. 请求体定义 ---
 
@@ -97,17 +95,62 @@ class JudgeRequest(BaseModel):
 agent = DeepSeekAgent()
 
 # --- 5. 接口实现 ---
+@app.get("/health", summary="系统健康检查 (免密白名单)")
+async def health_check():
+    """供云服务器负载均衡或运维看护判定实例是否存活"""
+    redis_healthy = check_redis_health()
+    mysql_healthy = mysql_pool is not None
+    
+    status_code = 200 if (redis_healthy and mysql_healthy) else 500
+    return {
+        "status": "healthy" if status_code == 200 else "unhealthy",
+        "components": {
+            "redis_cluster": "OK" if redis_healthy else "FAIL",
+            "mysql_pool": "OK" if mysql_healthy else "FAIL"
+        }
+    }
 
-@app.post("/api/login")
-async def handle_login(req: LoginRequest):
-    if r is None:
-        raise HTTPException(status_code=503, detail="认证服务不可用")
+@app.post("/api/login", summary="用户一键免操作登录/自动注册")
+async def login(request: Request):
+    """
+    接收前端传入的手机号和设备指纹：
+    1. 解析 Nginx 转发的真实客户端 IP
+    2. 自动进行查库与安全审计注册
+    3. 联动 Redis 集群颁发分布式 Token
+    """
+    body = await request.json()
+    phone = body.get("phone")
+    fingerprint = body.get("fingerprint")
+    
+    # 获取经过代理洗白后的真实 IP
+    real_ip = get_client_real_ip(request)
+    
+    # 调用 auth 模块处理核心逻辑
+    token = handle_user_login_db(phone=phone, fingerprint=fingerprint, real_ip=real_ip)
+    
+    return {
+        "code": 200,
+        "message": "登录成功",
+        "data": {
+            "token": token
+        }
+    }
 
-    access_token = uuid.uuid4().hex
-    val = f"{req.phone}|{req.fingerprint}"
-    r.setex(_auth_key(access_token), ACCESS_TOKEN_EXPIRE, val)
-
-    return {"success": True, "token": access_token, "msg": "登录成功，欢迎使用 PDF AI 助手"}
+@app.get("/api/user/info", summary="获取当前登录用户信息 (受保护接口)")
+async def get_user_info(request: Request):
+    """
+    通过了全局中间件的请求，可以直接从 request.state 中安全取出 phone
+    """
+    # 这里的 user_phone 是由 auth_middleware 成功解析后注入的
+    current_user_phone = request.state.user_phone
+    
+    return {
+        "code": 200,
+        "data": {
+            "phone": current_user_phone,
+            "role": "user"
+        }
+    }
 
 @app.post("/api/ocr")
 async def handle_ocr(req: OCRRequest, request: Request):

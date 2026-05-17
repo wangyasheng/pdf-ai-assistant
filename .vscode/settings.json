@@ -1,0 +1,5 @@
+{
+  "terminal.integrated.env.windows": {
+    "IS_LOCAL": "true"
+  }
+}
