@@ -185,4 +185,11 @@ async def judge_answer(req: JudgeRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    
+    # 🌟 从环境变量动态获取端口，如果获取不到则默认 8000
+    # 这能保证 1Panel 启动多实例时，每个实例能精确把自己的真实外网端口报给 Consul
+    PORT = int(os.getenv("APP_PORT", "8000"))
+    
+    logger.info(f"🚀 集群节点正在启动，监听端口: {PORT}")
+    uvicorn.run("backend.server:app", host="0.0.0.0", port=PORT, reload=False)

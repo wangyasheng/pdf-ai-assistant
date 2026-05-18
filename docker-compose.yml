@@ -1,66 +1,10 @@
-version: "3.9"
-
 services:
-  backend:
-    build: .
-    container_name: pdf-ai-backend
-    ports:
-      - "8000:8000"
+  my-service:
+    build: .                 # 核心：告诉 Portainer 直接在本地根据上面的 Dockerfile 编译代码
+    container_name: pdf-ai-service
+    restart: always
+    network_mode: host       # 使用 host 模式，让应用能直接通过 127.0.0.1:8500 连上本机的 Consul
     environment:
-      - REDIS_URL=redis://:wdd_819815!@redis:6379/0
-      - MYSQL_HOST=mysql
-      - MYSQL_USER=root
-      - MYSQL_PASSWORD=wdd_819815*
-      - MYSQL_DB=knowledge_base
-      - CONSUL_HOST=consul
-      - IS_LOCAL=false
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: pdf-ai-redis
-    command: redis-server --requirepass wdd_819815!
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-
-  mysql:
-    image: mysql:8.0
-    container_name: pdf-ai-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: wdd_819815*
-      MYSQL_DATABASE: knowledge_base
-    ports:
-      - "3306:3306"
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    volumes:
-      - mysql_data:/var/lib/mysql
-    restart: unless-stopped
-
-  consul:
-    image: consul:1.15
-    container_name: pdf-ai-consul
-    ports:
-      - "8500:8500"
-    command: agent -dev -client=0.0.0.0
-    restart: unless-stopped
-
-volumes:
-  redis_data:
-  mysql_data:
+      - ENV=production
+      - CONSUL_HOST=127.0.0.1
+      - CONSUL_PORT=8500
