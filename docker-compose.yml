@@ -1,10 +1,9 @@
+version: '3.8'
+
 services:
-  my-service:
-    build: .                 # 核心：告诉 Portainer 直接在本地根据上面的 Dockerfile 编译代码
-    container_name: pdf-ai-service
-    restart: always
-    network_mode: host       # 使用 host 模式，让应用能直接通过 127.0.0.1:8500 连上本机的 Consul
-    environment:
-      - ENV=production
-      - CONSUL_HOST=127.0.0.1
-      - CONSUL_PORT=8500
+  app-builder:
+    build: .                 # 根据当前目录的 Dockerfile 进行编译
+    image: crpi-rqm712svm0emwmme.cn-shanghai.personal.cr.aliyuncs.com/wang-space/pdf-ai-service:latest # 阿里云镜像完整地址
+    container_name: pdf-ai-builder-runner
+    restart: "no"            # 打包完直接退出，不需要它一直运行
+    entrypoint: ["echo", "Build and Tag Done!"]
