@@ -2,14 +2,27 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# ================= 🚀 核心修复：把下面这两行换源命令插进去 =================
-# 将 Debian/Ubuntu 的官方源直接替换为腾讯云/阿里云镜像源（看你服务器厂商，通用推荐阿里云）
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
-    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+# ================= 🚀 真正安全的 Debian 12 换源写法 =================
+# 使用 Base64 或 Here-Doc (<<'EOF') 写入多行，绝对不会因为换行符导致 Dockerfile 解析失败
+RUN cat << 'EOF' > /etc/apt/sources.list.d/debian.sources
+Types: deb
+URIs: http://mirrors.aliyun.com/debian/
+Suites: bookworm bookworm-updates bookworm-backports
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
+Types: deb
+URIs: http://mirrors.aliyun.com/debian-security
+Suites: bookworm-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+
+# 清空旧文件，确保不留下干扰
+RUN echo "" > /etc/apt/sources.list
 # =========================================================================
 
-# 这时候再跑你的这行系统库安装，只要 10 秒钟就能全部瞬间下完！
+# 接下来是执行你的系统库安装（此时已百分百走阿里云镜像源）
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
